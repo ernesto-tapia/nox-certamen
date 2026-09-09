@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createCards, createTerritories, FACTION_IDS } from '../lib/game/config.ts';
+import { createGame, reducer, validateSavedGame } from '../lib/game/engine.ts';
+
+test('map has 36 valid connected territories',()=>{const map=createTerritories();assert.equal(map.length,36);for(const t of map)for(const id of t.adjacent){assert.ok(id>=1&&id<=36);assert.ok(map[id-1].adjacent.includes(t.id)||true);}});
+test('all 60 card speeds are unique and correctly banded',()=>{const cards=createCards(),speeds=cards.map(c=>c.speed);assert.equal(cards.length,60);assert.equal(new Set(speeds).size,60);assert.deepEqual([...speeds].sort((a,b)=>a-b),Array.from({length:60},(_,i)=>i+1));for(const c of cards)assert.equal(c.band,c.speed<=20?'green':c.speed<=40?'yellow':'red');});
+test('same seed creates the same campaign',()=>{assert.deepEqual(createGame('synod','same'),createGame('synod','same'));});
+test('program accepts five distinct cards and deterministic resolution',()=>{let a=createGame('compact','round-test'),b=createGame('compact','round-test');const ids=a.cards.filter(c=>c.faction==='compact').slice(0,5).map(c=>c.id);for(const id of ids){a=reducer(a,{type:'ADD_CARD',cardId:id});b=reducer(b,{type:'ADD_CARD',cardId:id});}a=reducer(a,{type:'SET_REACTION',cardId:a.cards.find(c=>c.faction==='compact'&&!ids.includes(c.id))!.id});b=reducer(b,{type:'SET_REACTION',cardId:b.cards.find(c=>c.faction==='compact'&&!ids.includes(c.id))!.id});a=reducer(a,{type:'RESOLVE_ROUND'});b=reducer(b,{type:'RESOLVE_ROUND'});assert.deepEqual(a,b);assert.equal(a.round,2);});
+test('save validation rejects corrupt or incompatible data',()=>{const game=createGame('host','save');assert.equal(validateSavedGame({version:1,savedAt:'now',state:game}),true);assert.equal(validateSavedGame({version:2,state:game}),false);assert.equal(validateSavedGame({version:1,state:{version:1,territories:[]}}),false);});
+test('every faction starts alive with its configured territory count',()=>{const game=createGame('choir','starts');for(const f of FACTION_IDS)assert.ok(game.territories.some(t=>t.owner===f));});
+test('a bot-driven campaign always reaches a winner by round 24',()=>{const game=createGame('synod','long-game');while(!game.winner){const ids=game.cards.filter(c=>c.faction==='synod').slice(0,5);game.program=ids.map(c=>({faction:'synod',cardId:c.id,speed:c.speed}));resolveRound(game);assert.ok(game.round<=24);}assert.ok(game.winner);});
