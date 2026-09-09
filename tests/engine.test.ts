@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCards, createTerritories, FACTION_IDS } from '../lib/game/config.ts';
-import { createGame, reducer, validateSavedGame } from '../lib/game/engine.ts';
+import { createGame, reducer, resolveRound, validateSavedGame } from '../lib/game/engine.ts';
 
 test('map has 36 valid connected territories',()=>{const map=createTerritories();assert.equal(map.length,36);for(const t of map)for(const id of t.adjacent){assert.ok(id>=1&&id<=36);assert.ok(map[id-1].adjacent.includes(t.id)||true);}});
 test('all 60 card speeds are unique and correctly banded',()=>{const cards=createCards(),speeds=cards.map(c=>c.speed);assert.equal(cards.length,60);assert.equal(new Set(speeds).size,60);assert.deepEqual([...speeds].sort((a,b)=>a-b),Array.from({length:60},(_,i)=>i+1));for(const c of cards)assert.equal(c.band,c.speed<=20?'green':c.speed<=40?'yellow':'red');});
