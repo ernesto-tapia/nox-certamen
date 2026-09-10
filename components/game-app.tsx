@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type DragEvent, type ReactNode } from 'react';
 import {
   Eye,
   Hammer,
@@ -41,7 +41,7 @@ import type {
   SavedGame,
 } from '@/lib/game/types';
 
-const SAVE_KEY = 'nox-certamen-save-v2';
+const SAVE_KEY = 'nox-certamen-save-v3';
 const actionIcon: Record<string, typeof Swords> = {
   attack: Swords,
   repair: Hammer,
@@ -53,6 +53,15 @@ const actionIcon: Record<string, typeof Swords> = {
   research: Eye,
   march: ScrollText,
   faction: Sparkles,
+};
+const roleToken: Record<RoleId, string> = {
+  hq: '◈',
+  industrial: '⚙',
+  warehouse: '▣',
+  spy: '◎',
+  training: '⚔',
+  fortress: '⬟',
+  depot: '◇',
 };
 
 function Setup({
@@ -152,15 +161,35 @@ function Map({
   onSelect,
   validTargetIds = [],
   selectionKind = null,
+  setupControls = null,
+  draggingRole = false,
+  inspectedRole = null,
+  onInspectRole,
+  onPlacedRoleDragStart,
+  onRoleDragEnd,
+  onRoleDrop,
 }: {
   game: GameState;
   onSelect: (id: number) => void;
   validTargetIds?: number[];
   selectionKind?: 'origin' | 'destination' | 'target' | null;
+  setupControls?: ReactNode;
+  draggingRole?: boolean;
+  inspectedRole?: RoleId | null;
+  onInspectRole?: (role: RoleId | null) => void;
+  onPlacedRoleDragStart?: (role: RoleId, territoryId: number) => void;
+  onRoleDragEnd?: () => void;
+  onRoleDrop?: (territoryId: number) => void;
 }) {
   const [hiddenCombatId, setHiddenCombatId] = useState<number | null>(null);
+  const [hoveredTerritoryId, setHoveredTerritoryId] = useState<number | null>(
+    null,
+  );
   const player = game.playerFaction,
     combatEvent = game.events[0]?.combat ? game.events[0] : null;
+  const hoveredTerritory = hoveredTerritoryId
+    ? game.territories[hoveredTerritoryId - 1]
+    : null;
   return (
     <section className="map-panel panel">
       <div className="map-heading">
@@ -182,6 +211,7 @@ function Map({
           <span>● Troops</span>
         </div>
       </div>
+      {setupControls}
       <svg
         viewBox="0 0 860 590"
         role="img"
@@ -206,6 +236,8 @@ function Map({
           const selected = game.selectedTerritory === t.id;
           const valid = validTargetIds.includes(t.id);
           const visible = t.owner === player || t.roleRevealed;
+          const troopRadius = 22 + Math.min(16, Math.sqrt(t.troops) * 5);
+          const innerRadius = Math.max(15, troopRadius - 7);
           return (
             <g
               key={t.id}
@@ -213,44 +245,190 @@ function Map({
               role="button"
               tabIndex={0}
               aria-label={`${t.name}, ${t.troops} troops${valid ? `, valid ${selectionKind ?? 'target'}` : ''}`}
+              onMouseEnter={() => setHoveredTerritoryId(t.id)}
+              onMouseLeave={() => setHoveredTerritoryId(null)}
+              onFocus={() => setHoveredTerritoryId(t.id)}
+              onBlur={() => setHoveredTerritoryId(null)}
+              onDragOver={(event) => {
+                if (
+                  draggingRole &&
+                  t.owner === player &&
+                  game.phase === 'setup'
+                )
+                  event.preventDefault();
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                onRoleDrop?.(t.id);
+              }}
               onClick={() => onSelect(t.id)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') onSelect(t.id);
               }}
             >
               {valid && (
-                <circle cx={t.x} cy={t.y} r="34" className="target-pulse" />
+                <circle
+                  cx={t.x}
+                  cy={t.y}
+                  r={troopRadius + 7}
+                  className="target-pulse"
+                />
               )}
-              <circle cx={t.x} cy={t.y} r="27" fill={f?.color ?? '#30343a'} />
-              <circle cx={t.x} cy={t.y} r="20" className="inner" />
+              <circle
+                cx={t.x}
+                cy={t.y}
+                r={troopRadius}
+                fill={f?.color ?? '#30343a'}
+              />
+              {game.phase === 'setup' && t.owner === player && t.role && (
+                <foreignObject
+                  x={t.x - 12}
+                  y={t.y - 12}
+                  width="24"
+                  height="24"
+                  className="building-token-anchor"
+                >
+                  <button
+                    className={`building-token ${t.role}`}
+                    draggable
+                    aria-label={`${ROLES.find((role) => role.id === t.role)?.name} at ${t.name}. Drag to move or swap.`}
+                    onMouseEnter={() => onInspectRole?.(t.role!)}
+                    onMouseLeave={() => onInspectRole?.(null)}
+                    onFocus={() => onInspectRole?.(t.role!)}
+                    onBlur={() => onInspectRole?.(null)}
+                    onDragStart={(event: DragEvent<HTMLButtonElement>) => {
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', t.role!);
+                      onPlacedRoleDragStart?.(t.role!, t.id);
+                    }}
+                    onDragEnd={onRoleDragEnd}
+                  >
+                    {roleToken[t.role]}
+                  </button>
+                </foreignObject>
+              )}
+              <circle cx={t.x} cy={t.y} r={innerRadius} className="inner" />
               <text x={t.x} y={t.y + 4} className="troops">
                 {t.troops}
               </text>
-              {visible && t.role === 'hq' && (
-                <text x={t.x + 20} y={t.y - 18} className="role-mark">
+              {game.phase !== 'setup' && visible && t.role === 'hq' && (
+                <text
+                  x={t.x + troopRadius * 0.72}
+                  y={t.y - troopRadius * 0.68}
+                  className="role-mark"
+                >
                   ◈
                 </text>
               )}
-              {visible && t.role && t.role !== 'hq' && (
-                <text x={t.x + 20} y={t.y - 18} className="role-mark">
-                  ◆
-                </text>
-              )}
+              {game.phase !== 'setup' &&
+                visible &&
+                t.role &&
+                t.role !== 'hq' && (
+                  <text
+                    x={t.x + troopRadius * 0.72}
+                    y={t.y - troopRadius * 0.68}
+                    className="role-mark"
+                  >
+                    ◆
+                  </text>
+                )}
               {t.damage > 0 && (
-                <text x={t.x - 27} y={t.y - 20} className="damage">
+                <text
+                  x={t.x - troopRadius}
+                  y={t.y - troopRadius * 0.72}
+                  className="damage"
+                >
                   -{t.damage}
                 </text>
               )}
-              <text x={t.x} y={t.y + 41} className="territory-name">
-                {t.name}
-              </text>
-              <text x={t.x} y={t.y + 52} className="territory-resource">
-                R{t.resourceValue}
-              </text>
             </g>
           );
         })}
       </svg>
+      {hoveredTerritory && !inspectedRole && (
+        <aside className="territory-tooltip" role="tooltip">
+          <p className="eyebrow">Territory dossier</p>
+          <h3>{hoveredTerritory.name}</h3>
+          <p className="owner-line">
+            <span
+              style={{
+                background: hoveredTerritory.owner
+                  ? game.factions[hoveredTerritory.owner].color
+                  : '#555',
+              }}
+            />
+            {hoveredTerritory.owner
+              ? game.factions[hoveredTerritory.owner].name
+              : 'Neutral territory'}
+          </p>
+          <dl>
+            <div>
+              <dt>Troops</dt>
+              <dd>{hoveredTerritory.troops}</dd>
+            </div>
+            <div>
+              <dt>Defense</dt>
+              <dd>{hoveredTerritory.defense}</dd>
+            </div>
+            <div>
+              <dt>Resources</dt>
+              <dd>{hoveredTerritory.resourceValue}/round</dd>
+            </div>
+            <div>
+              <dt>Links</dt>
+              <dd>{hoveredTerritory.adjacent.length}</dd>
+            </div>
+            <div>
+              <dt>Damage</dt>
+              <dd>{hoveredTerritory.damage}</dd>
+            </div>
+            <div>
+              <dt>Fortified</dt>
+              <dd>{hoveredTerritory.fortified}</dd>
+            </div>
+          </dl>
+          <p className="role-readout">
+            {hoveredTerritory.owner === player || hoveredTerritory.roleRevealed
+              ? (ROLES.find((role) => role.id === hoveredTerritory.role)
+                  ?.name ?? 'No infrastructure')
+              : 'Hidden infrastructure'}
+            {hoveredTerritory.role === 'warehouse' &&
+            (hoveredTerritory.owner === player || hoveredTerritory.roleRevealed)
+              ? ` · ${hoveredTerritory.storedResources}/${WAREHOUSE_CAPACITY} stored`
+              : ''}
+          </p>
+        </aside>
+      )}
+      {game.phase === 'setup' && inspectedRole && (
+        <aside className="territory-tooltip structure-tooltip" role="tooltip">
+          <p className="eyebrow">Infrastructure dossier</p>
+          <div className="structure-tooltip-heading">
+            <span className={`building-token ${inspectedRole}`}>
+              {roleToken[inspectedRole]}
+            </span>
+            <h3>{ROLES.find((role) => role.id === inspectedRole)?.name}</h3>
+          </div>
+          <p>{ROLES.find((role) => role.id === inspectedRole)?.description}</p>
+          <dl>
+            <div>
+              <dt>Defense dice</dt>
+              <dd>
+                +
+                {ROLES.find((role) => role.id === inspectedRole)
+                  ?.defenseBonus ?? 0}
+              </dd>
+            </div>
+            <div>
+              <dt>Visibility</dt>
+              <dd>Secret</dd>
+            </div>
+          </dl>
+          <small>
+            Drag onto an owned territory. Drag again to move or swap it before
+            locking.
+          </small>
+        </aside>
+      )}
       {combatEvent && combatEvent.id !== hiddenCombatId && (
         <CombatDice
           game={game}
@@ -262,7 +440,7 @@ function Map({
         <span>
           {validTargetIds.length
             ? `Choose one of the glowing valid ${selectionKind ?? 'target'} territories.`
-            : 'Select a territory to inspect it.'}
+            : 'Hover or focus a territory for details.'}
         </span>
         <span>Round {game.round}</span>
       </div>
@@ -275,6 +453,8 @@ function Card({
   chosen,
   reaction,
   coolingDown,
+  selectionDisabled,
+  reactionDisabled,
   onAdd,
   onReact,
 }: {
@@ -282,13 +462,26 @@ function Card({
   chosen: boolean;
   reaction: boolean;
   coolingDown: boolean;
+  selectionDisabled: boolean;
+  reactionDisabled: boolean;
   onAdd: () => void;
   onReact: () => void;
 }) {
   const Icon = actionIcon[card.action] ?? ScrollText;
+  const selectable = !selectionDisabled && !chosen && !reaction && !coolingDown;
   return (
     <article
-      className={`order-card ${card.band} ${chosen || coolingDown ? 'chosen' : ''}`}
+      className={`order-card ${card.band} ${chosen || coolingDown ? 'chosen' : ''} ${selectable ? 'selectable' : ''}`}
+      role="button"
+      tabIndex={selectable ? 0 : -1}
+      aria-label={`${selectable ? 'Add' : 'Unavailable'} ${card.name} as a Sequence order`}
+      onClick={() => selectable && onAdd()}
+      onKeyDown={(event) => {
+        if (selectable && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          onAdd();
+        }
+      }}
     >
       <div className="card-speed">
         <span>{card.speed}</span>
@@ -299,12 +492,27 @@ function Card({
       <p>{card.sequence}</p>
       <small className="reaction-copy">Reaction: {card.reaction}</small>
       <div className="card-actions">
-        <button onClick={onAdd} disabled={chosen || reaction || coolingDown}>
-          {coolingDown ? 'Exhausted' : chosen ? 'Queued' : 'Sequence'}
+        <button
+          onClick={(event) => {
+            event.stopPropagation();
+            onAdd();
+          }}
+          disabled={selectionDisabled || chosen || reaction || coolingDown}
+        >
+          {coolingDown
+            ? 'Exhausted'
+            : chosen
+              ? 'Queued'
+              : selectionDisabled
+                ? 'Locked'
+                : 'Sequence'}
         </button>
         <button
-          onClick={onReact}
-          disabled={chosen || coolingDown}
+          onClick={(event) => {
+            event.stopPropagation();
+            onReact();
+          }}
+          disabled={reactionDisabled || chosen || coolingDown}
           className={reaction ? 'reaction-active' : ''}
         >
           {coolingDown ? 'Next round' : reaction ? 'Selected' : 'Reaction'}
@@ -459,12 +667,18 @@ function CombatDice({
 function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
   const [game, setGame] = useState(initial);
   const [showRules, setShowRules] = useState(false);
+  const [showPowers, setShowPowers] = useState(false);
+  const [draggedRole, setDraggedRole] = useState<{
+    role: RoleId;
+    sourceTerritoryId: number | null;
+  } | null>(null);
+  const [inspectedRole, setInspectedRole] = useState<RoleId | null>(null);
   const [playerPanel, setPlayerPanel] = useState<
     'cards' | 'objectives' | 'tech' | 'log'
   >('cards');
   useEffect(() => {
     const save: SavedGame = {
-      version: 2,
+      version: 3,
       savedAt: new Date().toISOString(),
       state: game,
     };
@@ -472,11 +686,13 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
   }, [game]);
   const act = (command: Parameters<typeof reducer>[1]) =>
     setGame((g) => reducer(g, command));
-  const player = game.factions[game.playerFaction],
-    selected = game.selectedTerritory
-      ? game.territories[game.selectedTerritory - 1]
-      : null;
-  const deck = game.cards.filter((c) => c.faction === game.playerFaction);
+  const player = game.factions[game.playerFaction];
+  const selected = game.selectedTerritory
+    ? game.territories[game.selectedTerritory - 1]
+    : null;
+  const deck = game.cards
+    .filter((c) => c.faction === game.playerFaction)
+    .sort((a, b) => a.speed - b.speed);
   const lastCombat = game.events.find((e) => e.combat)?.combat;
   const currentAction = game.resolutionQueue[game.currentActionIndex],
     currentCard = currentAction
@@ -514,15 +730,6 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
         ? validTechnologies(game, game.playerFaction)
         : [],
     needsResearch = researchChoices.length > 0 && !game.resolutionTechnologyId;
-  const setRole = (role: RoleId) => {
-    if (
-      !selected ||
-      selected.owner !== game.playerFaction ||
-      game.phase !== 'setup'
-    )
-      return;
-    act({ type: 'ASSIGN_ROLE', territoryId: selected.id, role });
-  };
   const removeCard = (id: string) => act({ type: 'REMOVE_CARD', cardId: id });
   const commit = () => act({ type: 'COMMIT_PROGRAM' });
   const resolveNext = () => act({ type: 'RESOLVE_NEXT_ACTION' });
@@ -550,6 +757,13 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
           </span>
         </div>
         <button
+          className="powers-button"
+          aria-expanded={showPowers}
+          onClick={() => setShowPowers((open) => !open)}
+        >
+          Powers
+        </button>
+        <button
           className="icon-button"
           aria-label="Open rules"
           onClick={() => setShowRules(true)}
@@ -561,7 +775,23 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
         </button>
       </header>
       <section className="workspace">
-        <aside className="left-rail">
+        {showPowers && (
+          <button
+            className="drawer-scrim"
+            aria-label="Close powers drawer"
+            onClick={() => setShowPowers(false)}
+          />
+        )}
+        <aside
+          className={`left-rail powers-drawer ${showPowers ? 'open' : ''}`}
+        >
+          <button
+            className="drawer-close"
+            onClick={() => setShowPowers(false)}
+            aria-label="Close powers drawer"
+          >
+            <X size={18} />
+          </button>
           <section className="panel commander">
             <p className="eyebrow">Your covenant</p>
             <div className="commander-name">
@@ -584,8 +814,8 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                 <strong>{availableResources(game, game.playerFaction)}</strong>
               </div>
               <div>
-                <small>Intel</small>
-                <strong>{player.intel}</strong>
+                <small>Reserve dice</small>
+                <strong>{game.reserveDice[game.playerFaction]}</strong>
               </div>
               <div>
                 <small>Round</small>
@@ -602,94 +832,6 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                 </strong>
               </div>
             </div>
-          </section>
-          <section className="panel territory-detail">
-            <p className="eyebrow">Territory dossier</p>
-            {selected ? (
-              <>
-                <h3>{selected.name}</h3>
-                <p className="owner-line">
-                  <span
-                    style={{
-                      background: selected.owner
-                        ? game.factions[selected.owner].color
-                        : '#555',
-                    }}
-                  />
-                  {selected.owner
-                    ? game.factions[selected.owner].name
-                    : 'Neutral'}
-                </p>
-                <dl>
-                  <div>
-                    <dt>Troops</dt>
-                    <dd>{selected.troops}</dd>
-                  </div>
-                  <div>
-                    <dt>Defense</dt>
-                    <dd>{selected.defense}</dd>
-                  </div>
-                  <div>
-                    <dt>Resources</dt>
-                    <dd>{selected.resourceValue}/round</dd>
-                  </div>
-                  <div>
-                    <dt>Links</dt>
-                    <dd>{selected.adjacent.length}</dd>
-                  </div>
-                  <div>
-                    <dt>Damage</dt>
-                    <dd>{selected.damage}</dd>
-                  </div>
-                  {selected.role === 'warehouse' &&
-                    (selected.owner === game.playerFaction ||
-                      selected.roleRevealed) && (
-                      <div>
-                        <dt>Stored</dt>
-                        <dd>
-                          {selected.storedResources}/{WAREHOUSE_CAPACITY}
-                        </dd>
-                      </div>
-                    )}
-                </dl>
-                {selected.owner === game.playerFaction &&
-                game.phase === 'setup' ? (
-                  <label className="role-select">
-                    Secret role
-                    <select
-                      value={selected.role ?? ''}
-                      onChange={(e) => setRole(e.target.value as RoleId)}
-                    >
-                      <option value="" disabled>
-                        Choose infrastructure
-                      </option>
-                      {ROLES.filter(
-                        (r) =>
-                          r.id === selected.role ||
-                          remainingInfrastructureRoles(
-                            game,
-                            game.playerFaction,
-                          ).includes(r.id),
-                      ).map((r) => (
-                        <option value={r.id} key={r.id}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <p className="role-readout">
-                    {selected.roleRevealed ||
-                    selected.owner === game.playerFaction
-                      ? (ROLES.find((r) => r.id === selected.role)?.name ??
-                        'No infrastructure')
-                      : 'Hidden infrastructure'}
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="muted">Select a territory on the map.</p>
-            )}
           </section>
           <section className="panel rivals">
             <p className="eyebrow">Rival powers</p>
@@ -728,6 +870,90 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                     ? 'target'
                     : null
           }
+          setupControls={
+            game.phase === 'setup' ? (
+              <div className="setup-role-bar">
+                <div>
+                  <p className="eyebrow">Conceal infrastructure</p>
+                  <strong>Drag each token onto one of your territories</strong>
+                  {selected?.owner === game.playerFaction && (
+                    <div className="selected-structure-control">
+                      <span>
+                        {selected.name}:{' '}
+                        {ROLES.find((role) => role.id === selected.role)
+                          ?.name ?? 'empty'}
+                      </span>
+                      {selected.role && (
+                        <button
+                          onClick={() =>
+                            act({
+                              type: 'REMOVE_ROLE',
+                              territoryId: selected.id,
+                            })
+                          }
+                        >
+                          Return to tray
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div
+                  className="building-token-tray"
+                  aria-label="Unplaced infrastructure"
+                >
+                  {remainingInfrastructureRoles(game, game.playerFaction).map(
+                    (role, index) => (
+                      <button
+                        key={`${role}-${index}`}
+                        className={`building-token ${role}`}
+                        draggable
+                        aria-label={`Unplaced ${ROLES.find((item) => item.id === role)?.name}`}
+                        onMouseEnter={() => setInspectedRole(role)}
+                        onMouseLeave={() => setInspectedRole(null)}
+                        onFocus={() => setInspectedRole(role)}
+                        onBlur={() => setInspectedRole(null)}
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = 'move';
+                          event.dataTransfer.setData('text/plain', role);
+                          setDraggedRole({ role, sourceTerritoryId: null });
+                        }}
+                        onDragEnd={() => setDraggedRole(null)}
+                      >
+                        <span>{roleToken[role]}</span>
+                        <small>
+                          {ROLES.find((item) => item.id === role)?.name}
+                        </small>
+                      </button>
+                    ),
+                  )}
+                </div>
+                <small>
+                  Drag a placed token to another owned node to move it. Dropping
+                  it on an occupied node swaps both buildings.
+                </small>
+              </div>
+            ) : null
+          }
+          draggingRole={Boolean(draggedRole)}
+          inspectedRole={inspectedRole}
+          onInspectRole={setInspectedRole}
+          onPlacedRoleDragStart={(role, territoryId) =>
+            setDraggedRole({ role, sourceTerritoryId: territoryId })
+          }
+          onRoleDragEnd={() => setDraggedRole(null)}
+          onRoleDrop={(territoryId) => {
+            if (!draggedRole) return;
+            if (draggedRole.sourceTerritoryId === null)
+              act({ type: 'ASSIGN_ROLE', territoryId, role: draggedRole.role });
+            else
+              act({
+                type: 'MOVE_ROLE',
+                sourceTerritoryId: draggedRole.sourceTerritoryId,
+                targetTerritoryId: territoryId,
+              });
+            setDraggedRole(null);
+          }}
           onSelect={(id) =>
             act(
               isPlayerAttack && attackOriginIds.includes(id)
@@ -753,7 +979,7 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                 className={playerPanel === 'objectives' ? 'active' : ''}
                 onClick={() => setPlayerPanel('objectives')}
               >
-                VP
+                Goals
               </button>
               <button
                 className={playerPanel === 'tech' ? 'active' : ''}
@@ -787,6 +1013,11 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                           cooldown?.cardId === card.id &&
                           cooldown.untilRound >= game.round
                         }
+                        selectionDisabled={
+                          game.phase !== 'programming' ||
+                          game.program.length >= 5
+                        }
+                        reactionDisabled={game.phase !== 'programming'}
                         onAdd={() => act({ type: 'ADD_CARD', cardId: card.id })}
                         onReact={() =>
                           act({ type: 'SET_REACTION', cardId: card.id })
@@ -803,31 +1034,20 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                   <article className="round-goal" key={goal.id}>
                     <strong>
                       {goal.name}
-                      <b>{goal.vp} VP</b>
+                      <b>
+                        {goal.reward.amount}{' '}
+                        {goal.reward.kind === 'vp'
+                          ? 'VP'
+                          : goal.reward.kind === 'dice'
+                            ? goal.reward.amount === 1
+                              ? 'die'
+                              : 'dice'
+                            : goal.reward.kind}
+                      </b>
                     </strong>
                     <p>{goal.description}</p>
                   </article>
                 ))}
-                <p className="eyebrow">Public claims</p>
-                {game.publicObjectives.map((o) => (
-                  <article key={o.id}>
-                    <strong>
-                      {o.name}
-                      <b>{o.vp} VP</b>
-                    </strong>
-                    <p>{o.description}</p>
-                  </article>
-                ))}
-                <p className="eyebrow secret-label">Secret purpose</p>
-                <article className="secret-objective">
-                  <strong>
-                    {game.factions[game.playerFaction].secretObjective}
-                  </strong>
-                  <p>
-                    Known only to your covenant. Complete it before your rivals
-                    read your design.
-                  </p>
-                </article>
               </div>
             ) : playerPanel === 'tech' ? (
               <div className="tech-list">
@@ -848,7 +1068,7 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                     >
                       {player.technologies.includes(t.id)
                         ? 'Known'
-                        : `${t.cost} Intel · ${t.resourceCost} res`}
+                        : `${t.resourceCost} resources`}
                     </button>
                   </article>
                 ))}
@@ -1063,9 +1283,7 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                           }
                         >
                           <span>{tech.name}</span>
-                          <small>
-                            {tech.cost} Intel · {tech.resourceCost} resources
-                          </small>
+                          <small>{tech.resourceCost} resources</small>
                         </button>
                       ))}
                     </div>
@@ -1152,7 +1370,7 @@ function Game({ initial, onExit }: { initial: GameState; onExit: () => void }) {
                 })}
               </div>
             </div>
-            <div className="program-intel">
+            <div className="program-status">
               <div className="reaction-display">
                 <p className="eyebrow">Hidden reaction</p>
                 <strong>

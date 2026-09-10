@@ -47,6 +47,37 @@ test('infrastructure setup enforces the faction recipe before programming', () =
   assert.equal(game.phase, 'programming');
 });
 
+test('infrastructure tokens move and swap between owned territories before lock', () => {
+  let game = createUnreadyGame('synod', 'setup-drag');
+  const [first, second] = game.territories.filter((t) => t.owner === 'synod');
+  game = reducer(game, {
+    type: 'ASSIGN_ROLE',
+    territoryId: first.id,
+    role: 'hq',
+  });
+  game = reducer(game, {
+    type: 'MOVE_ROLE',
+    sourceTerritoryId: first.id,
+    targetTerritoryId: second.id,
+  });
+  assert.equal(game.territories[first.id - 1].role, null);
+  assert.equal(game.territories[second.id - 1].role, 'hq');
+  game = reducer(game, {
+    type: 'ASSIGN_ROLE',
+    territoryId: first.id,
+    role: 'industrial',
+  });
+  game = reducer(game, {
+    type: 'MOVE_ROLE',
+    sourceTerritoryId: first.id,
+    targetTerritoryId: second.id,
+  });
+  assert.equal(game.territories[first.id - 1].role, 'hq');
+  assert.equal(game.territories[second.id - 1].role, 'industrial');
+  game = reducer(game, { type: 'REMOVE_ROLE', territoryId: second.id });
+  assert.equal(game.territories[second.id - 1].role, null);
+});
+
 test('map has 36 valid connected territories', () => {
   const map = createTerritories();
   assert.equal(map.length, 36);
@@ -83,6 +114,29 @@ test('all 60 card speeds are unique and correctly banded', () => {
       c.band,
       c.speed <= 20 ? 'green' : c.speed <= 40 ? 'yellow' : 'red',
     );
+  for (const faction of FACTION_IDS) {
+    const deck = cards.filter((card) => card.faction === faction);
+    assert.deepEqual(
+      ['green', 'yellow', 'red'].map(
+        (band) => deck.filter((card) => card.band === band).length,
+      ),
+      [5, 5, 5],
+    );
+    for (const action of ['attack', 'march'] as const)
+      assert.deepEqual(
+        deck
+          .filter((card) => card.action === action)
+          .map((card) => card.band)
+          .sort(),
+        ['green', 'red', 'yellow'],
+      );
+  }
+  const signatureSpeed = (faction: (typeof FACTION_IDS)[number]) =>
+    cards.find((card) => card.faction === faction && card.action === 'faction')!
+      .speed;
+  assert.ok(signatureSpeed('choir') < signatureSpeed('host'));
+  assert.ok(signatureSpeed('host') < signatureSpeed('compact'));
+  assert.ok(signatureSpeed('compact') < signatureSpeed('synod'));
 });
 test('same seed creates the same campaign', () => {
   assert.deepEqual(createGame('synod', 'same'), createGame('synod', 'same'));
@@ -166,7 +220,10 @@ test('commit reveals every program and resolves each slot by speed', () => {
         t.troops > 1 &&
         t.adjacent.includes(game.attackDraft!.targetId!),
     )!;
-    game = reducer(game, { type: 'TOGGLE_ATTACK_ORIGIN', territoryId: origin.id });
+    game = reducer(game, {
+      type: 'TOGGLE_ATTACK_ORIGIN',
+      territoryId: origin.id,
+    });
     game = reducer(game, { type: 'CONFIRM_ATTACK_ORDER' });
     game = reducer(game, { type: 'SKIP_ATTACK_ORDER' });
   }
@@ -318,14 +375,13 @@ test('fast and total muster spend warehouse resources to produce troops', () => 
     beforeTroops + 2 + remaining,
   );
 });
-test('research requires its card, resources, Intel, and a technology choice', () => {
+test('research requires its card, map resources, and a technology choice', () => {
   let game = createGame('synod', 'resource-research');
   const card = game.cards.find(
       (candidate) =>
         candidate.faction === 'synod' && candidate.action === 'research',
     )!,
     technology = game.technologies[0];
-  game.factions.synod.intel = technology.cost;
   game.phase = 'resolution';
   game.resolutionQueue = [
     { faction: 'synod', cardId: card.id, speed: card.speed, slot: 0 },
@@ -339,7 +395,6 @@ test('research requires its card, resources, Intel, and a technology choice', ()
   const before = availableResources(game, 'synod');
   game = reducer(game, { type: 'RESOLVE_NEXT_ACTION' });
   assert.ok(game.factions.synod.technologies.includes(technology.id));
-  assert.equal(game.factions.synod.intel, 0);
   assert.equal(
     availableResources(game, 'synod'),
     before - technology.resourceCost,
@@ -354,7 +409,7 @@ test('three round goals score before victory and are replaced next round', () =>
       id: 'test-compact',
       name: 'Test Compact Domain',
       description: 'Control no more than four territories.',
-      vp: 3,
+      reward: { kind: 'vp', amount: 3 },
       kind: 'compact-domain',
       threshold: 4,
       claimedBy: [],
@@ -363,7 +418,7 @@ test('three round goals score before victory and are replaced next round', () =>
       id: 'test-neutral-a',
       name: 'Test Neutral A',
       description: 'Control a neutral territory.',
-      vp: 1,
+      reward: { kind: 'troops', amount: 1 },
       kind: 'control-territory',
       targetTerritoryId: 9,
       claimedBy: [],
@@ -372,7 +427,7 @@ test('three round goals score before victory and are replaced next round', () =>
       id: 'test-neutral-b',
       name: 'Test Neutral B',
       description: 'Control another neutral territory.',
-      vp: 1,
+      reward: { kind: 'dice', amount: 1 },
       kind: 'control-territory',
       targetTerritoryId: 10,
       claimedBy: [],
@@ -386,6 +441,53 @@ test('three round goals score before victory and are replaced next round', () =>
   assert.equal(game.round, 2);
   assert.equal(game.roundGoals.length, 3);
   assert.ok(game.events.some((event) => event.type === 'round-goal'));
+});
+
+test('round goals can grant dice, troops, and technologies', () => {
+  let game = createGame('synod', 'mixed-goal-rewards');
+  const beforeTroops = game.territories
+    .filter((territory) => territory.owner === 'synod')
+    .reduce((total, territory) => total + territory.troops, 0);
+  game.roundGoals = [
+    {
+      id: 'dice',
+      name: 'Dice',
+      description: '',
+      kind: 'compact-domain',
+      threshold: 4,
+      reward: { kind: 'dice', amount: 1 },
+      claimedBy: [],
+    },
+    {
+      id: 'troops',
+      name: 'Troops',
+      description: '',
+      kind: 'compact-domain',
+      threshold: 4,
+      reward: { kind: 'troops', amount: 2 },
+      claimedBy: [],
+    },
+    {
+      id: 'technology',
+      name: 'Technology',
+      description: '',
+      kind: 'compact-domain',
+      threshold: 4,
+      reward: { kind: 'technology', amount: 1 },
+      claimedBy: [],
+    },
+  ];
+  game.phase = 'resolution';
+  game.resolutionQueue = [];
+  game = reducer(game, { type: 'RESOLVE_NEXT_ACTION' });
+  assert.equal(game.reserveDice.synod, 1);
+  assert.equal(
+    game.territories
+      .filter((territory) => territory.owner === 'synod')
+      .reduce((total, territory) => total + territory.troops, 0),
+    beforeTroops + 2,
+  );
+  assert.equal(game.factions.synod.technologies.length, 1);
 });
 test('movement requires an origin and then an adjacent destination', () => {
   let game = createGame('synod', 'move-choice');
@@ -427,7 +529,7 @@ test('movement requires an origin and then an adjacent destination', () => {
 test('save validation rejects corrupt or incompatible data', () => {
   const game = createGame('host', 'save');
   assert.equal(
-    validateSavedGame({ version: 2, savedAt: 'now', state: game }),
+    validateSavedGame({ version: 3, savedAt: 'now', state: game }),
     true,
   );
   assert.equal(validateSavedGame({ version: 1, state: game }), false);
@@ -438,8 +540,14 @@ test('save validation rejects corrupt or incompatible data', () => {
 });
 test('every faction starts alive with its configured territory count', () => {
   const game = createGame('choir', 'starts');
+  const expectedTroops = { synod: 22, compact: 18, host: 15, choir: 10 };
   for (const f of FACTION_IDS)
-    assert.ok(game.territories.some((t) => t.owner === f));
+    assert.equal(
+      game.territories
+        .filter((territory) => territory.owner === f)
+        .reduce((total, territory) => total + territory.troops, 0),
+      expectedTroops[f],
+    );
 });
 test('a bot-driven campaign always reaches a winner by round 24', () => {
   const game = createGame('synod', 'long-game');

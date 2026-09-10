@@ -4,10 +4,8 @@ import {
   FACTIONS,
   FACTION_IDS,
   INFRASTRUCTURE_RECIPES,
-  PUBLIC_OBJECTIVES,
   ROLES,
   ROUND_GOALS,
-  SECRET_OBJECTIVES,
   TECHNOLOGIES,
 } from './config.ts';
 import { hashSeed, nextRandom, rollDie } from './rng.ts';
@@ -77,12 +75,8 @@ export function createGame(playerFaction: FactionId, seed: string): GameState {
       {
         ...FACTIONS[id],
         vp: 0,
-        intel: 0,
         eliminated: false,
         technologies: [],
-        secretObjective:
-          SECRET_OBJECTIVES[FACTION_IDS.indexOf(id) % SECRET_OBJECTIVES.length]
-            .id,
       },
     ]),
   ) as unknown as GameState['factions'];
@@ -97,19 +91,28 @@ export function createGame(playerFaction: FactionId, seed: string): GameState {
     rngState = nextRoles;
     starts[f].forEach((id, i) => {
       territories[id - 1].owner = f;
-      territories[id - 1].troops = i === 0 ? 4 : 2;
+      const troopStarts: Record<
+        FactionId,
+        { capital: number; others: number }
+      > = {
+        synod: { capital: 7, others: 5 },
+        compact: { capital: 6, others: 3 },
+        host: { capital: 5, others: 2 },
+        choir: { capital: 4, others: 1 },
+      };
+      territories[id - 1].troops =
+        i === 0 ? troopStarts[f].capital : troopStarts[f].others;
       territories[id - 1].role = f === playerFaction ? null : roleOrder[i];
       territories[id - 1].roleRevealed = f === playerFaction;
     });
   }
-  const [deck, next] = shuffle(PUBLIC_OBJECTIVES, rngState);
   const [roundDeck, afterRoundGoals] = shuffle(
     structuredClone(ROUND_GOALS),
-    next,
+    rngState,
   );
   rngState = afterRoundGoals;
   const state: GameState = {
-    version: 2,
+    version: 3,
     seed,
     rngState,
     round: 1,
@@ -131,6 +134,7 @@ export function createGame(playerFaction: FactionId, seed: string): GameState {
     reaction: null,
     botReactions: [],
     reactionCooldowns: { synod: null, compact: null, host: null, choir: null },
+    reserveDice: { synod: 0, compact: 0, host: 0, choir: 0 },
     factionStats: Object.fromEntries(
       FACTION_IDS.map((f) => [
         f,
@@ -143,15 +147,7 @@ export function createGame(playerFaction: FactionId, seed: string): GameState {
         },
       ]),
     ) as GameState['factionStats'],
-    completedObjectiveIds: {
-      synod: [],
-      compact: [],
-      host: [],
-      choir: [],
-    },
     events: [],
-    publicObjectives: deck.slice(0, 3),
-    objectiveDeck: deck.slice(3),
     roundGoals: roundDeck.slice(0, 3),
     roundGoalDeck: roundDeck.slice(3),
     roundGoalDiscard: [],
@@ -223,7 +219,16 @@ export function production(state: GameState) {
       income -= deposit;
       stored += deposit;
     }
-    if (lands.some((t) => t.role === 'spy')) state.factions[f].intel += 1;
+    if (lands.some((t) => t.role === 'spy')) {
+      const revealed = border(state, f)
+        .flatMap((territory) => territory.adjacent)
+        .map((id) => state.territories[id - 1])
+        .find((territory) => territory.owner !== f && !territory.roleRevealed);
+      if (revealed) {
+        revealed.roleRevealed = true;
+        state.factionStats[f].rolesRevealed++;
+      }
+    }
     event(
       state,
       'production',
@@ -325,6 +330,10 @@ function resolveCombat(
   const reaction = triggerReaction(state, target.owner, target);
   attackBonus = Math.max(0, attackBonus - reaction.attackPenalty);
   const defender = target.owner;
+  const attackReserve = state.reserveDice[attacker];
+  const defenseReserve = defender ? state.reserveDice[defender] : 0;
+  state.reserveDice[attacker] = 0;
+  if (defender) state.reserveDice[defender] = 0;
   const committed = origins.map((o) =>
     Math.max(
       1,
@@ -337,6 +346,7 @@ function resolveCombat(
   const attackCount =
     committed.reduce((a, b) => a + b, 0) +
     attackBonus +
+    attackReserve +
     techBonus(state, attacker, 'attackBonus') +
     (origins.some((o) => o.role === 'training')
       ? state.factions[attacker].trainingBonus
@@ -350,6 +360,7 @@ function resolveCombat(
       : 0) +
     roleBonus +
     target.fortified +
+    defenseReserve +
     reaction.defenseBonus;
   const activeBonus = Math.max(
     0,
@@ -597,7 +608,6 @@ export function validTechnologies(state: GameState, f: FactionId) {
   return state.technologies.filter(
     (t) =>
       !state.factions[f].technologies.includes(t.id) &&
-      state.factions[f].intel >= t.cost &&
       resources >= t.resourceCost,
   );
 }
@@ -643,6 +653,7 @@ export function combatDicePreview(
   const attackBonus =
     card.power -
     1 +
+    state.reserveDice[a.faction] +
     techBonus(state, a.faction, 'attackBonus') +
     (origins.some((o) => o.role === 'training')
       ? state.factions[a.faction].trainingBonus
@@ -655,6 +666,7 @@ export function combatDicePreview(
     target.troops * (target.defense - 1) +
     (defender
       ? state.factions[defender].defenseBonus +
+        state.reserveDice[defender] +
         techBonus(state, defender, 'defenseBonus')
       : 0) +
     visibleRoleBonus +
@@ -790,12 +802,11 @@ function execute(state: GameState, a: ProgrammedAction) {
         choices[0];
     if (tech) {
       spendResources(state, faction, tech.resourceCost);
-      state.factions[faction].intel -= tech.cost;
       state.factions[faction].technologies.push(tech.id);
       event(
         state,
         'technology',
-        `${state.factions[faction].name} spends ${tech.resourceCost} resources and ${tech.cost} Intel to research ${tech.name}.`,
+        `${state.factions[faction].name} spends ${tech.resourceCost} resources to research ${tech.name}.`,
       );
     } else
       event(
@@ -804,7 +815,6 @@ function execute(state: GameState, a: ProgrammedAction) {
         `${card.name} fails; no affordable technology is available.`,
       );
   } else if (card.action === 'recon') {
-    state.factions[faction].intel++;
     const candidates = border(state, faction)
         .flatMap((t) => t.adjacent.map((id) => state.territories[id - 1]))
         .filter((t) => t.owner !== faction && !t.roleRevealed),
@@ -816,7 +826,7 @@ function execute(state: GameState, a: ProgrammedAction) {
     event(
       state,
       'recon',
-      `${state.factions[faction].name} gains intel${enemy ? ` and reveals ${enemy.name}` : ''}.`,
+      `${state.factions[faction].name} scouts${enemy ? ` and reveals ${enemy.name}` : ', but finds no hidden infrastructure'}.`,
     );
   } else if (card.action === 'sabotage') {
     const hit = chooseTarget(state, faction, a.targetId);
@@ -920,93 +930,6 @@ export function botDecision(state: GameState, faction: FactionId): BotDecision {
     pursuedGoalIds,
   };
 }
-function hasFortifiedChain(state: GameState, faction: FactionId) {
-  const eligible = owned(state, faction).filter((t) => t.fortified > 0);
-  return eligible.some((start) => {
-    const seen = new Set([start.id]),
-      queue = [start];
-    while (queue.length) {
-      const current = queue.shift()!;
-      for (const id of current.adjacent) {
-        if (!seen.has(id) && eligible.some((t) => t.id === id)) {
-          seen.add(id);
-          queue.push(state.territories[id - 1]);
-        }
-      }
-    }
-    return seen.size >= 4;
-  });
-}
-function claimObjectives(state: GameState, preferred?: FactionId) {
-  const order = preferred
-    ? [preferred, ...FACTION_IDS.filter((f) => f !== preferred)]
-    : FACTION_IDS;
-  for (const f of order) {
-    if (state.factions[f].eliminated) continue;
-    const regions = new Set(owned(state, f).map((t) => t.region));
-    const captures = state.events.filter(
-      (e) =>
-        e.round === state.round &&
-        e.combat?.attacker === f &&
-        e.combat.captured,
-    ).length;
-    const roundCombats = state.events.filter((e) => e.round === state.round);
-    const hit = state.publicObjectives.find(
-      (o) =>
-        (o.id === 'breaker' && captures >= 2) ||
-        (o.id === 'dominion' &&
-          [...regions].some((r) =>
-            state.territories
-              .filter((t) => t.region === r)
-              .every((t) => t.owner === f),
-          )) ||
-        (o.id === 'siege' &&
-          roundCombats.some(
-            (e) =>
-              e.combat?.attacker === f &&
-              e.combat.captured &&
-              e.combat.targetHadDamage,
-          )) ||
-        (o.id === 'eyes' && state.factionStats[f].rolesRevealed >= 2) ||
-        (o.id === 'engine' &&
-          owned(state, f).filter((t) => t.role === 'industrial').length >= 2) ||
-        (o.id === 'bulwark' && hasFortifiedChain(state, f)),
-    );
-    if (hit) {
-      state.factions[f].vp += hit.vp;
-      event(
-        state,
-        'objective',
-        `${state.factions[f].name} claims ${hit.name} for ${hit.vp} VP.`,
-      );
-      state.publicObjectives = state.publicObjectives.filter(
-        (o) => o.id !== hit.id,
-      );
-      const next = state.objectiveDeck.shift();
-      if (next) state.publicObjectives.push(next);
-    }
-
-    const secret = SECRET_OBJECTIVES.find(
-      (objective) => objective.id === state.factions[f].secretObjective,
-    );
-    if (secret && !state.completedObjectiveIds[f].includes(secret.id)) {
-      const qualifies =
-        (secret.id === 'head' && state.factionStats[f].hqCaptures >= 1) ||
-        (secret.id === 'border' && regions.size >= 4) ||
-        (secret.id === 'intel' && state.factions[f].technologies.length >= 3) ||
-        (secret.id === 'scarred' && state.factionStats[f].damageInflicted >= 4);
-      if (qualifies) {
-        state.completedObjectiveIds[f].push(secret.id);
-        state.factions[f].vp += secret.vp;
-        event(
-          state,
-          'objective',
-          `${state.factions[f].name} fulfills a secret objective for ${secret.vp} VP.`,
-        );
-      }
-    }
-  }
-}
 function qualifiesForRoundGoal(
   state: GameState,
   f: FactionId,
@@ -1061,11 +984,37 @@ function claimRoundGoals(state: GameState) {
       )
         continue;
       goal.claimedBy.push(faction);
-      state.factions[faction].vp += goal.vp;
+      let rewardText = '';
+      if (goal.reward.kind === 'vp') {
+        state.factions[faction].vp += goal.reward.amount;
+        rewardText = `${goal.reward.amount} VP`;
+      } else if (goal.reward.kind === 'dice') {
+        state.reserveDice[faction] = Math.min(
+          3,
+          state.reserveDice[faction] + goal.reward.amount,
+        );
+        rewardText = `${goal.reward.amount} reserve combat ${goal.reward.amount === 1 ? 'die' : 'dice'}`;
+      } else if (goal.reward.kind === 'troops') {
+        const target = owned(state, faction).sort(
+          (a, b) => a.troops - b.troops || a.id - b.id,
+        )[0];
+        if (target) target.troops += goal.reward.amount;
+        rewardText = `${goal.reward.amount} troops${target ? ` at ${target.name}` : ''}`;
+      } else {
+        const technology = state.technologies.find(
+          (candidate) =>
+            !state.factions[faction].technologies.includes(candidate.id),
+        );
+        if (technology)
+          state.factions[faction].technologies.push(technology.id);
+        rewardText = technology
+          ? `the ${technology.name} technology`
+          : 'no technology';
+      }
       event(
         state,
         'round-goal',
-        `${state.factions[faction].name} completes ${goal.name} for ${goal.vp} VP.`,
+        `${state.factions[faction].name} completes ${goal.name} and gains ${rewardText}.`,
       );
     }
   }
@@ -1120,7 +1069,6 @@ export function commitPrograms(state: GameState) {
 }
 function finishRound(state: GameState) {
   claimRoundGoals(state);
-  claimObjectives(state);
   let winner =
     FACTION_IDS.find((f) => state.factions[f].vp >= 10) ||
     (FACTION_IDS.filter((f) => !state.factions[f].eliminated).length === 1
@@ -1181,7 +1129,6 @@ export function resolveNextAction(state: GameState) {
     `Resolving Slot ${action.slot + 1}: ${state.factions[action.faction].name}'s ${card.name} at Speed ${card.speed}.`,
   );
   execute(state, action);
-  claimObjectives(state, action.faction);
   state.currentActionIndex++;
   state.resolutionOriginId = null;
   state.resolutionTargetId = null;
@@ -1218,6 +1165,25 @@ export function reducer(state: GameState, command: GameCommand): GameState {
         territory.role = command.role;
         territory.roleRevealed = true;
       } else territory.role = previous;
+    }
+  }
+  if (command.type === 'REMOVE_ROLE' && next.phase === 'setup') {
+    const territory = next.territories[command.territoryId - 1];
+    if (territory?.owner === next.playerFaction) territory.role = null;
+  }
+  if (command.type === 'MOVE_ROLE' && next.phase === 'setup') {
+    const source = next.territories[command.sourceTerritoryId - 1];
+    const target = next.territories[command.targetTerritoryId - 1];
+    if (
+      source?.owner === next.playerFaction &&
+      target?.owner === next.playerFaction &&
+      source.id !== target.id &&
+      source.role
+    ) {
+      [source.role, target.role] = [target.role, source.role];
+      source.roleRevealed = true;
+      target.roleRevealed = true;
+      next.selectedTerritory = target.id;
     }
   }
   if (
@@ -1317,7 +1283,6 @@ export function reducer(state: GameState, command: GameCommand): GameState {
             `Resolving Slot ${current.slot + 1}: ${next.factions[current.faction].name}'s ${card.name} at Speed ${card.speed}.`,
           );
         resolveAttackOrder(next, next.playerFaction, card, order);
-        claimObjectives(next, next.playerFaction);
         current.attackOrders = [...(current.attackOrders ?? []), order];
         const remaining = validTargets(next, current);
         if (current.attackOrders.length >= 2 || remaining.length === 0)
@@ -1385,7 +1350,7 @@ export function reducer(state: GameState, command: GameCommand): GameState {
   }
   if (
     command.type === 'SET_REACTION' &&
-    next.phase !== 'resolution' &&
+    next.phase === 'programming' &&
     !next.program.some((a) => a.cardId === command.cardId) &&
     !unavailable(command.cardId)
   )
@@ -1436,7 +1401,7 @@ export function reducer(state: GameState, command: GameCommand): GameState {
 }
 export function validateSavedGame(
   value: unknown,
-): value is { version: 2; savedAt: string; state: GameState } {
+): value is { version: 3; savedAt: string; state: GameState } {
   if (!value || typeof value !== 'object') return false;
   const v = value as {
     version?: unknown;
@@ -1461,8 +1426,8 @@ export function validateSavedGame(
     };
   };
   return (
-    v.version === 2 &&
-    v.state?.version === 2 &&
+    v.version === 3 &&
+    v.state?.version === 3 &&
     Array.isArray(v.state.territories) &&
     v.state.territories.length === 36 &&
     v.state.territories.every(
@@ -1480,7 +1445,7 @@ export function validateSavedGame(
     Array.isArray(v.state.roundGoalDeck) &&
     Array.isArray(v.state.roundGoalDiscard) &&
     Boolean((v.state as GameState).factionStats) &&
-    Boolean((v.state as GameState).completedObjectiveIds) &&
+    Boolean((v.state as GameState).reserveDice) &&
     typeof v.state.currentActionIndex === 'number' &&
     (v.state.resolutionOriginId === null ||
       typeof v.state.resolutionOriginId === 'number') &&

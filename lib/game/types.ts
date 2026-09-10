@@ -35,10 +35,8 @@ export interface Faction {
   trainingBonus: number;
   special: string;
   vp: number;
-  intel: number;
   eliminated: boolean;
   technologies: string[];
-  secretObjective: string;
 }
 export interface Territory {
   id: number;
@@ -117,13 +115,6 @@ export interface CombatResult {
   targetHadDamage: boolean;
   summary: string;
 }
-export interface Objective {
-  id: string;
-  name: string;
-  description: string;
-  vp: number;
-  kind: 'public' | 'secret';
-}
 export type RoundGoalKind =
   | 'control-territory'
   | 'survive-attack'
@@ -135,7 +126,10 @@ export interface RoundGoal {
   id: string;
   name: string;
   description: string;
-  vp: number;
+  reward: {
+    kind: 'vp' | 'dice' | 'troops' | 'technology';
+    amount: number;
+  };
   kind: RoundGoalKind;
   targetTerritoryId?: number;
   threshold?: number;
@@ -144,7 +138,6 @@ export interface RoundGoal {
 export interface Technology {
   id: string;
   name: string;
-  cost: number;
   resourceCost: number;
   description: string;
   attackBonus?: number;
@@ -178,7 +171,7 @@ export interface ReactionCooldown {
   untilRound: number;
 }
 export interface GameState {
-  version: 2;
+  version: 3;
   seed: string;
   rngState: number;
   round: number;
@@ -200,11 +193,9 @@ export interface GameState {
   reaction: Reaction | null;
   botReactions: Reaction[];
   reactionCooldowns: Record<FactionId, ReactionCooldown | null>;
+  reserveDice: Record<FactionId, number>;
   factionStats: Record<FactionId, FactionStats>;
-  completedObjectiveIds: Record<FactionId, string[]>;
   events: GameEvent[];
-  publicObjectives: Objective[];
-  objectiveDeck: Objective[];
   roundGoals: RoundGoal[];
   roundGoalDeck: RoundGoal[];
   roundGoalDiscard: RoundGoal[];
@@ -213,7 +204,7 @@ export interface GameState {
   selectedTerritory: number | null;
 }
 export interface SavedGame {
-  version: 2;
+  version: 3;
   savedAt: string;
   state: GameState;
 }
@@ -224,6 +215,8 @@ export type GameCommand =
   | { type: 'SELECT_RESOLUTION_TARGET'; territoryId: number }
   | { type: 'SELECT_TECHNOLOGY'; technologyId: string }
   | { type: 'ASSIGN_ROLE'; territoryId: number; role: RoleId }
+  | { type: 'REMOVE_ROLE'; territoryId: number }
+  | { type: 'MOVE_ROLE'; sourceTerritoryId: number; targetTerritoryId: number }
   | { type: 'LOCK_SETUP' }
   | { type: 'TOGGLE_ATTACK_ORIGIN'; territoryId: number }
   | { type: 'SET_ATTACK_COMMITMENT'; territoryId: number; troops: number }

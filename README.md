@@ -30,7 +30,7 @@ python3 tools/combat_simulator.py --attackers 6 --defenders 3 --defense 2 --tria
 - 60 physical cards with globally unique speeds 1–60
 - Five program slots resolved in order; each slot resolves all factions by Speed before the next slot begins
 - Hidden HQ and infrastructure roles
-- Production, intel, six technologies, objectives, VP, elimination, and conquest victory
+- Resource production, six technologies, mixed-reward round goals, VP, elimination, and conquest victory
 - Sorted-dice combat with persistent defense damage
 - Seeded bots and versioned local autosave
 - A 24-round limit with VP, territory, and troop tiebreakers

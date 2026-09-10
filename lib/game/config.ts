@@ -3,7 +3,6 @@ import type {
   Faction,
   FactionId,
   HiddenRole,
-  Objective,
   RoundGoal,
   RoleId,
   Technology,
@@ -27,10 +26,7 @@ export const INFRASTRUCTURE_RECIPES: Record<FactionId, RoleId[]> = {
 };
 export const FACTIONS: Record<
   FactionId,
-  Omit<
-    Faction,
-    'vp' | 'intel' | 'eliminated' | 'technologies' | 'secretObjective'
-  >
+  Omit<Faction, 'vp' | 'eliminated' | 'technologies'>
 > = {
   synod: {
     id: 'synod',
@@ -52,7 +48,7 @@ export const FACTIONS: Record<
     production: 3,
     defenseBonus: 1,
     trainingBonus: 1,
-    special: 'Whisper Roads — recon also grants one intel.',
+    special: 'Whisper Roads — recon reveals through extended borders.',
   },
   host: {
     id: 'host',
@@ -88,19 +84,20 @@ export const ROLES: HiddenRole[] = [
     id: 'industrial',
     name: 'Industrial Complex',
     defenseBonus: 0,
-    description: 'Produces troops here and through the supply network.',
+    description:
+      'The preferred site for automatic musters and required for War Engine objectives.',
   },
   {
     id: 'warehouse',
     name: 'Warehouse',
     defenseBonus: 1,
-    description: 'Protects one unused production each round.',
+    description: 'Stores up to eight resources gathered from your territories.',
   },
   {
     id: 'spy',
     name: 'Spy Network',
     defenseBonus: 0,
-    description: 'Generates intel for technologies.',
+    description: 'Reveals one adjacent enemy structure during production.',
   },
   {
     id: 'training',
@@ -270,7 +267,7 @@ const ACTIONS: {
     name: 'Forbidden Thesis',
     action: 'research',
     power: 1,
-    sequence: 'Spend resources and Intel to research one technology.',
+    sequence: 'Spend stored map resources to research one technology.',
     reaction: 'Reveal the attacking card before choosing response.',
   },
   {
@@ -341,16 +338,58 @@ function oppositeReaction(action: CardDefinition['action'], power: number) {
   return 'When attacked, invoke the faction defense and add at least one defense die.';
 }
 export function createCards(): CardDefinition[] {
-  return FACTION_IDS.flatMap((faction, fi) =>
+  const signatureSpeeds: Record<FactionId, number> = {
+    choir: 1,
+    host: 21,
+    compact: 40,
+    synod: 60,
+  };
+  const availableSpeeds = {
+    green: Array.from({ length: 19 }, (_, index) => index + 2),
+    yellow: Array.from({ length: 18 }, (_, index) => index + 22),
+    red: Array.from({ length: 19 }, (_, index) => index + 41),
+  };
+  const baseBands: CardDefinition['band'][] = [
+    'green',
+    'yellow',
+    'red',
+    'green',
+    'yellow',
+    'green',
+    'yellow',
+    'yellow',
+    'yellow',
+    'red',
+    'green',
+    'red',
+    'red',
+    'red',
+    'red',
+  ];
+  return FACTION_IDS.flatMap((faction) =>
     ACTIONS.map((a, i) => {
-      const speed = i * 4 + fi + 1;
+      let band = baseBands[i];
+      if (i === 8 && (faction === 'compact' || faction === 'host'))
+        band = 'green';
+      if (i === 9 && faction === 'synod') band = 'green';
+      if (a.action === 'faction')
+        band =
+          faction === 'choir'
+            ? 'green'
+            : faction === 'synod'
+              ? 'red'
+              : 'yellow';
+      const speed =
+        a.action === 'faction'
+          ? signatureSpeeds[faction]
+          : availableSpeeds[band].shift()!;
       return {
         id: `${faction}-${i + 1}`,
         faction,
         name: a.name,
         action: a.action,
         speed,
-        band: speed <= 20 ? 'green' : speed <= 40 ? 'yellow' : 'red',
+        band,
         power: a.power,
         productionMode: a.productionMode,
         sequence: a.sequence,
@@ -363,7 +402,6 @@ export const TECHNOLOGIES: Technology[] = [
   {
     id: 'edge',
     name: 'Black-Iron Edge',
-    cost: 3,
     resourceCost: 3,
     description: '+1 attack die.',
     attackBonus: 1,
@@ -371,7 +409,6 @@ export const TECHNOLOGIES: Technology[] = [
   {
     id: 'wards',
     name: 'Graven Wards',
-    cost: 3,
     resourceCost: 3,
     description: '+1 defense die.',
     defenseBonus: 1,
@@ -379,7 +416,6 @@ export const TECHNOLOGIES: Technology[] = [
   {
     id: 'furnace',
     name: 'Night Furnace',
-    cost: 4,
     resourceCost: 4,
     description: '+1 resource when income is collected.',
     productionBonus: 1,
@@ -387,97 +423,20 @@ export const TECHNOLOGIES: Technology[] = [
   {
     id: 'signals',
     name: 'Whisper Signals',
-    cost: 4,
     resourceCost: 3,
     description: 'Recon reveals two roles.',
   },
   {
     id: 'logistics',
     name: 'Bone Roads',
-    cost: 5,
     resourceCost: 4,
     description: 'March moves one extra troop.',
   },
   {
     id: 'doctrine',
     name: 'Doctrine of Ruin',
-    cost: 5,
     resourceCost: 5,
     description: 'First capture each round grants 1 VP.',
-  },
-];
-export const PUBLIC_OBJECTIVES: Objective[] = [
-  {
-    id: 'breaker',
-    name: 'Gatebreaker',
-    description: 'Capture two territories in one round.',
-    vp: 2,
-    kind: 'public',
-  },
-  {
-    id: 'dominion',
-    name: 'Claim a Dominion',
-    description: 'Control all six territories in one region.',
-    vp: 2,
-    kind: 'public',
-  },
-  {
-    id: 'siege',
-    name: 'Patient Siege',
-    description: 'Capture a territory with defense damage.',
-    vp: 1,
-    kind: 'public',
-  },
-  {
-    id: 'eyes',
-    name: 'Eyes Everywhere',
-    description: 'Reveal two enemy roles in one round.',
-    vp: 1,
-    kind: 'public',
-  },
-  {
-    id: 'engine',
-    name: 'War Engine',
-    description: 'Control two Industrial Complexes.',
-    vp: 2,
-    kind: 'public',
-  },
-  {
-    id: 'bulwark',
-    name: 'Unbroken Line',
-    description: 'Own four adjacent fortified territories.',
-    vp: 2,
-    kind: 'public',
-  },
-];
-export const SECRET_OBJECTIVES: Objective[] = [
-  {
-    id: 'head',
-    name: 'Sever the Head',
-    description: 'Capture an enemy HQ.',
-    vp: 3,
-    kind: 'secret',
-  },
-  {
-    id: 'border',
-    name: 'Long Border',
-    description: 'Own territories in four regions.',
-    vp: 2,
-    kind: 'secret',
-  },
-  {
-    id: 'intel',
-    name: 'Forbidden Knowing',
-    description: 'Research three technologies.',
-    vp: 2,
-    kind: 'secret',
-  },
-  {
-    id: 'scarred',
-    name: 'Scorched Earth',
-    description: 'Create four defense-damage markers.',
-    vp: 2,
-    kind: 'secret',
   },
 ];
 export const ROUND_GOALS: RoundGoal[] = [
@@ -485,7 +444,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'crown-mournwatch',
     name: 'Claim Mournwatch',
     description: 'Control Mournwatch when the round ends.',
-    vp: 1,
+    reward: { kind: 'vp', amount: 1 },
     kind: 'control-territory',
     targetTerritoryId: 3,
     claimedBy: [],
@@ -494,7 +453,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'cinder-keep',
     name: 'Hold Cinder Keep',
     description: 'Control Cinder Keep when the round ends.',
-    vp: 1,
+    reward: { kind: 'dice', amount: 1 },
     kind: 'control-territory',
     targetTerritoryId: 16,
     claimedBy: [],
@@ -503,7 +462,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'scarlet-downs',
     name: 'Take Scarlet Downs',
     description: 'Control Scarlet Downs when the round ends.',
-    vp: 1,
+    reward: { kind: 'troops', amount: 2 },
     kind: 'control-territory',
     targetTerritoryId: 28,
     claimedBy: [],
@@ -513,7 +472,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     name: 'Stand Fast',
     description:
       'Defend at least one attack without losing the territory this round.',
-    vp: 1,
+    reward: { kind: 'dice', amount: 1 },
     kind: 'survive-attack',
     claimedBy: [],
   },
@@ -521,7 +480,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'unyielding-night',
     name: 'Unyielding Night',
     description: 'Survive two attacks this round.',
-    vp: 2,
+    reward: { kind: 'technology', amount: 1 },
     kind: 'survive-attack',
     threshold: 2,
     claimedBy: [],
@@ -530,7 +489,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'four-banners',
     name: 'Four Banners',
     description: 'Have at least 3 troops on four territories.',
-    vp: 1,
+    reward: { kind: 'troops', amount: 2 },
     kind: 'troop-network',
     threshold: 3,
     claimedBy: [],
@@ -539,7 +498,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'deep-garrisons',
     name: 'Deep Garrisons',
     description: 'Have at least 4 troops on four territories.',
-    vp: 2,
+    reward: { kind: 'troops', amount: 3 },
     kind: 'troop-network',
     threshold: 4,
     claimedBy: [],
@@ -548,7 +507,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'humble-ground',
     name: 'Humble Ground',
     description: 'Control at least three 1-resource territories.',
-    vp: 1,
+    reward: { kind: 'dice', amount: 1 },
     kind: 'low-resource-holdings',
     threshold: 3,
     claimedBy: [],
@@ -557,7 +516,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'lean-crown',
     name: 'Lean Crown',
     description: 'Control at least four but no more than five territories.',
-    vp: 1,
+    reward: { kind: 'vp', amount: 1 },
     kind: 'compact-domain',
     threshold: 5,
     claimedBy: [],
@@ -566,7 +525,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'last-redoubt',
     name: 'Last Redoubt',
     description: 'Control at least three but no more than four territories.',
-    vp: 2,
+    reward: { kind: 'technology', amount: 1 },
     kind: 'compact-domain',
     threshold: 4,
     claimedBy: [],
@@ -575,7 +534,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'full-coffers',
     name: 'Full Coffers',
     description: 'End the round with at least 6 stored resources.',
-    vp: 1,
+    reward: { kind: 'troops', amount: 2 },
     kind: 'stored-resources',
     threshold: 6,
     claimedBy: [],
@@ -584,7 +543,7 @@ export const ROUND_GOALS: RoundGoal[] = [
     id: 'war-reserve',
     name: 'War Reserve',
     description: 'End the round with a full 8-resource Warehouse.',
-    vp: 2,
+    reward: { kind: 'technology', amount: 1 },
     kind: 'stored-resources',
     threshold: 8,
     claimedBy: [],
