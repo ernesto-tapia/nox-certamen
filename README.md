@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by the development server. Choose a covenant and campaign seed, assign hidden roles during Production, then select five Sequence cards and one Reaction. Select a map territory before queuing an Attack card to make it the preferred target.
+Open the local URL printed by the development server. Choose a covenant and campaign seed, assign hidden roles during Production, then select five Sequence cards and one Reaction from the queue at the top of the battlefield. Enemy card backs reveal only their Green, Yellow, or Red speed bands while you program. When one of your cards reaches the front of its slot, choose from the legal territories highlighted on the map. Attack targets show your available dice versus the enemy's minimum known defense dice (`≥` allows for hidden infrastructure). Movement asks for an origin first and then an adjacent destination. The active card effect remains visible while choosing, and each combat exchange displays every die and its resulting losses in a dismissible panel.
 
 ```bash
 npm test
@@ -24,6 +24,7 @@ python3 tools/combat_simulator.py --attackers 6 --defenders 3 --defense 2 --tria
 - 36 connected territories in six regions
 - Four asymmetric dark-fantasy factions
 - 60 physical cards with globally unique speeds 1–60
+- Five program slots resolved in order; each slot resolves all factions by Speed before the next slot begins
 - Hidden HQ and infrastructure roles
 - Production, intel, six technologies, objectives, VP, elimination, and conquest victory
 - Sorted-dice combat with persistent defense damage
